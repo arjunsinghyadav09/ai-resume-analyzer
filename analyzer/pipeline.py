@@ -1,19 +1,20 @@
 """
 pipeline.py
-Full-spectrum resume analysis:
-- Proper keyword extraction with word boundary matching
-- Experience quality analysis (action verbs, metrics, depth)
-- Role type detection
-- Specific actionable feedback
+Lightweight version for cloud deployment:
+- KeyBERT for keyword extraction (no torch needed separately)
+- HuggingFace Inference API for feedback generation
+- All heavy local model inference removed
 """
 
 import re
+import os
+import requests
 from keybert import KeyBERT
-from transformers import pipeline, AutoTokenizer, AutoModelForSeq2SeqLM
+from dotenv import load_dotenv
 
-MODEL_NAME = "google/flan-t5-base"
-_kw_model = None
-_pipe = None
+load_dotenv()
+
+HF_TOKEN = os.getenv("HF_API_TOKEN", "")
 
 GENERIC_IGNORE = {
     "skills", "experience", "work", "team", "client", "role", "job", "people",
@@ -82,6 +83,15 @@ INDUSTRY_KEYWORDS = [
     "real estate", "proptech",
 ]
 
+_kw_model = None
+
+
+def get_kw_model() -> KeyBERT:
+    global _kw_model
+    if _kw_model is None:
+        _kw_model = KeyBERT()
+    return _kw_model
+
 
 def word_boundary_match(term: str, text_lower: str) -> bool:
     escaped = re.escape(term.lower())
@@ -125,31 +135,6 @@ def detect_role_type(jd_text: str) -> str:
     }
     scores = {role: sum(1 for s in signals if s in lower) for role, signals in role_signals.items()}
     return max(scores, key=scores.get)
-
-
-def get_kw_model() -> KeyBERT:
-    global _kw_model
-    if _kw_model is None:
-        _kw_model = KeyBERT()
-    return _kw_model
-
-
-def get_pipeline():
-    global _pipe
-    if _pipe is None:
-        print(f"Loading model {MODEL_NAME}...")
-        tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-        model = AutoModelForSeq2SeqLM.from_pretrained(MODEL_NAME)
-        _pipe = pipeline(
-            "text2text-generation",
-            model=model,
-            tokenizer=tokenizer,
-            max_new_tokens=200,
-            repetition_penalty=3.0,
-            device=-1
-        )
-        print("Model loaded.")
-    return _pipe
 
 
 def extract_keywords(jd_text: str) -> list[str]:
@@ -272,18 +257,40 @@ def match_experience_to_jd(resume_text: str, jd_text: str) -> dict:
 
 
 def generate_feedback(resume_text: str, jd_text: str, score: int, missing_keywords: list[str]) -> str:
+    """
+    Generate feedback using HuggingFace Inference API.
+    Falls back to a rule-based response if API is unavailable.
+    """
     missing_str = ", ".join(missing_keywords[:5]) if missing_keywords else "none"
-    prompt = f"""Resume score: {score}%. Missing skills: {missing_str}.
 
-Resume: {resume_text[:350]}
-
+    if HF_TOKEN:
+        prompt = f"""Resume score: {score}%. Missing skills: {missing_str}.
+Resume: {resume_text[:300]}
 Job: {jd_text[:300]}
-
 Give 3 specific bullet point improvements to add to this resume:"""
 
-    pipe = get_pipeline()
-    result = pipe(prompt)[0]["generated_text"]
-    return result.strip()
+        try:
+            response = requests.post(
+                "https://api-inference.huggingface.co/models/google/flan-t5-base",
+                headers={"Authorization": f"Bearer {HF_TOKEN}"},
+                json={"inputs": prompt, "parameters": {"max_new_tokens": 200, "repetition_penalty": 3.0}},
+                timeout=30
+            )
+            if response.status_code == 200:
+                result = response.json()
+                if isinstance(result, list) and result:
+                    return result[0].get("generated_text", "").strip()
+        except Exception:
+            pass
+
+    # Rule-based fallback
+    lines = []
+    if missing_keywords:
+        lines.append(f"1. Add these missing skills to your Skills section: {', '.join(missing_keywords[:4])}.")
+    if score < 50:
+        lines.append("2. Tailor your summary to directly mention the role title and core technologies from the JD.")
+    lines.append("3. Add metrics to your bullet points — include numbers like accuracy %, dataset size, or time saved.")
+    return "\n".join(lines)
 
 
 def get_missing_keywords(resume_text: str, jd_keywords: list[str]) -> list[str]:
