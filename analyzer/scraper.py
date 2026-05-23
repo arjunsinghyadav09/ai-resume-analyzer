@@ -201,34 +201,12 @@ def fetch_jd_from_url(url: str) -> dict:
     # Try Jina AI Reader first
     jina = fetch_via_jina(url)
     if jina["success"]:
-        text = jina["text"]
-        if has_login_wall(text):
-            return {
-                "success": False,
-                "text": "",
-                "platform": platform,
-                "error": (
-                    f"{platform} requires login to view this job. "
-                    "Please paste the job description manually."
-                ),
-            }
-        return {"success": True, "text": text, "platform": platform, "error": None}
+        return {"success": True,"text": jina["text"], "platform": platform, "error": None}
 
     # Fallback: direct BeautifulSoup
     bs4 = fetch_via_bs4(url)
     if bs4["success"]:
-        text = bs4["text"]
-        if has_login_wall(text):
-            return {
-                "success": False,
-                "text": "",
-                "platform": platform,
-                "error": (
-                    f"{platform} requires login to view this job. "
-                    "Please paste the job description manually."
-                ),
-            }
-        return {"success": True, "text": text, "platform": platform, "error": None}
+        return {"success": True, "text": bs4["text"], "platform": platform, "error": None}
 
     error_code = bs4.get("error_code", "unknown")
     error_messages = {
