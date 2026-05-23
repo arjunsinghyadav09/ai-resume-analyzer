@@ -2,26 +2,36 @@
 app.py - AI Resume Analyzer Streamlit Frontend
 """
 
+import re
 import streamlit as st
 from analyzer.extractor import extract_text_from_pdf, get_section_hints
 from analyzer.scorer import compute_ats_score
 from analyzer.pipeline import (
     generate_feedback, analyze_experience_quality,
-    match_experience_to_jd, detect_role_type, extract_keywords,
-    get_missing_keywords, STRONG_VERBS
+    match_experience_to_jd, detect_role_type,
+    extract_keywords, get_missing_keywords, STRONG_VERBS
 )
 
 st.set_page_config(page_title="AI Resume Analyzer", page_icon="📄", layout="wide")
 
 st.title("📄 AI Resume Analyzer")
-st.markdown("Upload your resume and paste a job description for a full ATS analysis, experience evaluation, and copy-ready rewrite suggestions.")
+st.markdown(
+    "Upload your resume and paste a job description for a full ATS analysis, "
+    "experience evaluation, and copy-ready rewrite suggestions."
+)
 st.divider()
 
+# ── Input Columns ──────────────────────────────────────────────────────────────
+
 col1, col2 = st.columns(2)
+
 with col1:
     st.subheader("Your Resume")
-    upload_option = st.radio("Input method", ["Upload PDF", "Paste Text"], horizontal=True)
+    upload_option = st.radio(
+        "Input method", ["Upload PDF", "Paste Text"], horizontal=True
+    )
     resume_text = ""
+
     if upload_option == "Upload PDF":
         uploaded_file = st.file_uploader("Upload your resume (PDF)", type=["pdf"])
         if uploaded_file:
@@ -36,7 +46,36 @@ with col1:
 
 with col2:
     st.subheader("Job Description")
-    jd_text = st.text_area("Paste the job description here", height=300)
+    jd_input_mode = st.radio(
+        "Input method",
+        ["Paste Text", "Fetch from URL"],
+        horizontal=True
+    )
+    jd_text = ""
+
+    if jd_input_mode == "Fetch from URL":
+        jd_url = st.text_input(
+            "Paste a job URL (Naukri, Indeed, Internshala, etc.)",
+            placeholder="https://www.naukri.com/job-listings-..."
+        )
+        if jd_url:
+            with st.spinner("Fetching job description..."):
+                from analyzer.scraper import fetch_jd_from_url
+                result_scrape = fetch_jd_from_url(jd_url)
+
+            if result_scrape["success"]:
+                word_count = len(result_scrape["text"].split())
+                st.success(f"Fetched successfully — {word_count} words extracted.")
+                jd_text = result_scrape["text"]
+                with st.expander("Preview fetched JD"):
+                    preview = result_scrape["text"]
+                    st.text(preview[:1000] + "..." if len(preview) > 1000 else preview)
+            else:
+                st.error(result_scrape["error"])
+    else:
+        jd_text = st.text_area("Paste the job description here", height=300)
+
+# ── Analyze Button ─────────────────────────────────────────────────────────────
 
 st.divider()
 analyze_clicked = st.button("Analyze Resume", type="primary", use_container_width=True)
@@ -45,7 +84,7 @@ if analyze_clicked:
     if not resume_text.strip():
         st.error("Please provide your resume.")
     elif not jd_text.strip():
-        st.error("Please paste the job description.")
+        st.error("Please paste or fetch a job description.")
     else:
         with st.spinner("Running full analysis..."):
             result = compute_ats_score(resume_text, jd_text)
@@ -58,7 +97,9 @@ if analyze_clicked:
         st.subheader("ATS Score")
         st.caption(f"Role detected: **{role_type}**")
         s1, s2, s3 = st.columns(3)
-        rating_colors = {"Excellent": "🟢", "Good": "🔵", "Fair": "🟡", "Poor": "🔴"}
+        rating_colors = {
+            "Excellent": "🟢", "Good": "🔵", "Fair": "🟡", "Poor": "🔴"
+        }
         with s1:
             st.metric("Overall ATS Score", f"{result['final_score']}%")
             st.markdown(f"**Rating:** {rating_colors[result['rating']]} {result['rating']}")
@@ -129,14 +170,18 @@ if analyze_clicked:
             st.markdown("**Strong Action Verb Bullets**")
             if exp_quality["strong_verb_lines"]:
                 for line in exp_quality["strong_verb_lines"]:
-                    st.markdown(f"✅ _{line[:90]}..._" if len(line) > 90 else f"✅ _{line}_")
+                    st.markdown(
+                        f"✅ _{line[:90]}..._" if len(line) > 90 else f"✅ _{line}_"
+                    )
             else:
                 st.warning("No strong action verbs found. Use: Built, Developed, Optimized, Deployed...")
         with q2:
             st.markdown("**Weak Bullets to Rewrite**")
             if exp_quality["weak_verb_lines"]:
                 for line in exp_quality["weak_verb_lines"]:
-                    st.markdown(f"⚠️ _{line[:90]}..._" if len(line) > 90 else f"⚠️ _{line}_")
+                    st.markdown(
+                        f"⚠️ _{line[:90]}..._" if len(line) > 90 else f"⚠️ _{line}_"
+                    )
                 st.caption("Replace 'helped', 'assisted', 'responsible for' with impact verbs.")
             else:
                 st.success("No weak verb patterns found.")
@@ -144,17 +189,25 @@ if analyze_clicked:
             st.markdown("**Quantified Achievements**")
             if exp_quality["quantified_lines"]:
                 for line in exp_quality["quantified_lines"]:
-                    st.markdown(f"📊 _{line[:90]}..._" if len(line) > 90 else f"📊 _{line}_")
+                    st.markdown(
+                        f"📊 _{line[:90]}..._" if len(line) > 90 else f"📊 _{line}_"
+                    )
             else:
                 st.warning("No metrics found. Add numbers like: improved accuracy by 15%, processed 10k samples.")
-        st.caption(f"Bullets analysed: {exp_quality['total_bullets']} | Strong verbs: {exp_quality['strong_verb_count']} | Quantified: {exp_quality['quantified_count']}")
+        st.caption(
+            f"Bullets analysed: {exp_quality['total_bullets']} | "
+            f"Strong verbs: {exp_quality['strong_verb_count']} | "
+            f"Quantified: {exp_quality['quantified_count']}"
+        )
 
-        # ── Section 5: Resume vs JD Comparison + Rewrite Suggestions ──
+        # ── Section 5: Gap Analysis + Rewrite Suggestions ─────────────
         st.divider()
         st.subheader("Resume vs Job Description — Gap Analysis")
-        st.caption("What your resume currently has vs what this role actually needs, with copy-ready rewrites.")
+        st.caption(
+            "What your resume currently has vs what this role actually needs, "
+            "with copy-ready rewrites."
+        )
 
-        # Build comparison rows from matched and missing keywords
         matched = result["matched_keywords"]
         missing = result["missing_keywords"]
 
@@ -170,12 +223,10 @@ if analyze_clicked:
             for i, kw in enumerate(missing[:12]):
                 cols[i % 4].error(f"❌ {kw}")
 
-        # Rewrite suggestions with copy buttons
         st.divider()
         st.subheader("Copy-Ready Rewrite Suggestions")
         st.caption("Each suggestion below has a copy button on the right. Click it, paste directly into your resume.")
 
-        # Weak bullet rewrites
         if exp_quality["weak_verb_lines"]:
             st.markdown("#### Weak Bullets — Suggested Rewrites")
             rewrite_map = {
@@ -194,15 +245,15 @@ if analyze_clicked:
                 rewritten = line
                 for weak, strong in rewrite_map.items():
                     if weak in line.lower():
-                        import re
-                        rewritten = re.sub(re.escape(weak), strong, line, flags=re.IGNORECASE)
+                        rewritten = re.sub(
+                            re.escape(weak), strong, line, flags=re.IGNORECASE
+                        )
                         break
                 st.markdown("**Suggested rewrite:**")
                 st.code(rewritten, language="")
                 st.caption("Add a metric to this line for even more impact, e.g. 'improving X by Y%'")
                 st.markdown("---")
 
-        # Missing keyword bullet suggestions
         if missing:
             st.markdown("#### Missing Keywords — Suggested Bullets to Add")
             bullet_templates = {
@@ -227,13 +278,15 @@ if analyze_clicked:
                 "landing pages": "Built responsive landing pages with tracking pixels, A/B test variants, and form integrations for lead generation.",
             }
             for kw in missing[:8]:
-                kw_lower = kw.lower()
-                template = bullet_templates.get(kw_lower)
+                template = bullet_templates.get(kw.lower())
                 if template:
                     st.markdown(f"**Add this bullet for `{kw}`:**")
                     st.code(template, language="")
                 else:
-                    generic = f"Applied {kw} in a project context to [describe task], achieving [describe outcome or metric]."
+                    generic = (
+                        f"Applied {kw} in a project context to "
+                        f"[describe task], achieving [describe outcome or metric]."
+                    )
                     st.markdown(f"**Add this bullet for `{kw}`:**")
                     st.code(generic, language="")
                 st.markdown("")
