@@ -10,7 +10,7 @@ Features:
 - No heavy local inference
 - Backward-compatible API structure
 """
-
+import spacy
 import os
 import re
 import requests
@@ -200,9 +200,12 @@ INDUSTRY_KEYWORDS = [
 # =========================================================
 
 @lru_cache(maxsize=1)
-def get_kw_model() -> KeyBERT:
-    return KeyBERT()
-
+def get_nlp():
+    try:
+        return spacy.load("en_core_web_sm")
+    except OSError:
+        # fallback if model not found
+        return None
 # =========================================================
 # HELPERS
 # =========================================================
@@ -328,65 +331,98 @@ def detect_role_type(jd_text: str) -> str:
 # =========================================================
 
 def extract_keywords(jd_text: str) -> list[str]:
+    """
+    Universal keyword extractor using spaCy noun chunks + named entities.
+    Works for any role — tech, customer service, hardware, finance, anything.
+    TECH_VOCAB scan runs on top for guaranteed coverage of known tools.
+    """
+ 
+    # ── Step 1: TECH_VOCAB scan (guaranteed tool/framework coverage) ──────
     vocab_matches = vocab_scan(jd_text)
-
-    qual_section = extract_qualifications_section(jd_text)
-
-    kw_model = get_kw_model()
-
-    raw_keybert = kw_model.extract_keywords(
-        qual_section,
-        keyphrase_ngram_range=(1, 2),
-        stop_words="english",
-        top_n=40,
-        use_mmr=True,
-        diversity=0.7
-    )
-
-    keywords = []
-
-    for kw, score in raw_keybert:
-
-        if score < 0.35:
-            continue
-
-        kw = clean_keyword(kw)
-
-        if not kw:
-            continue
-
-        if kw in STOP_PHRASES:
-            continue
-
-        words = kw.split()
-
-        if all(w in GENERIC_IGNORE for w in words):
-            continue
-
-        if len(words) > 3:
-            continue
-
-        if len(kw) < 3:
-            continue
-
-        if len(words) == 1 and len(kw) <= 3:
-            if kw not in {"sql", "aws", "gcp", "ml", "ai"}:
+ 
+    # ── Step 2: spaCy noun phrase + entity extraction ─────────────────────
+    spacy_keywords = []
+    nlp = get_nlp()
+ 
+    if nlp:
+        # Only process the qualifications section for cleaner signal
+        section_text = extract_qualifications_section(jd_text)
+        doc = nlp(section_text[:5000])  # cap for speed
+ 
+        seen = set()
+ 
+        # Named entities: tools, products, orgs (e.g. "Salesforce", "AWS")
+        for ent in doc.ents:
+            if ent.label_ in ("ORG", "PRODUCT", "GPE", "WORK_OF_ART", "FAC"):
+                kw = ent.text.strip().lower()
+                if len(kw) > 2 and kw not in seen:
+                    seen.add(kw)
+                    spacy_keywords.append(kw)
+ 
+        # Noun chunks: skills, concepts, domain terms
+        # e.g. "conflict resolution", "CRM software", "PCB design"
+        for chunk in doc.noun_chunks:
+            root = chunk.root
+ 
+            # Only keep chunks rooted in a noun or proper noun
+            if root.pos_ not in ("NOUN", "PROPN"):
                 continue
-
-        keywords.append(normalize_keyword(kw))
-
+ 
+            # Skip stopwords as root
+            if root.is_stop:
+                continue
+ 
+            kw = chunk.text.strip().lower()
+ 
+            # Clean up leading determiners/articles
+            # e.g. "the ability to" → skip
+            kw = re.sub(r"^(a |an |the |our |your |their |this |that )", "", kw).strip()
+ 
+            if not kw or len(kw) < 3:
+                continue
+ 
+            # Skip if too many words (likely a full sentence fragment)
+            if len(kw.split()) > 4:
+                continue
+ 
+            # Skip pure digit strings
+            if re.match(r"^\d+$", kw):
+                continue
+ 
+            # Skip if root word is in a minimal stop list
+            # (only truly useless words, not domain terms)
+            HARD_STOP = {
+                "year", "years", "experience", "skill", "skills",
+                "ability", "knowledge", "understanding", "background",
+                "role", "position", "candidate", "applicant", "team",
+                "work", "day", "time", "way", "thing", "place",
+                "use", "need", "requirement", "opportunity",
+            }
+            if root.lemma_.lower() in HARD_STOP:
+                continue
+ 
+            if kw not in seen:
+                seen.add(kw)
+                spacy_keywords.append(kw)
+ 
+    # ── Step 3: Merge vocab matches + spaCy results ───────────────────────
     all_keywords = []
-
-    seen = set()
-
-    for kw in vocab_matches + keywords:
-        kw = normalize_keyword(kw)
-
-        if kw not in seen:
-            seen.add(kw)
-            all_keywords.append(kw)
-
+    merged_seen = set()
+ 
+    for kw in vocab_matches:
+        kw_norm = normalize_keyword(kw)
+        if kw_norm not in merged_seen:
+            merged_seen.add(kw_norm)
+            all_keywords.append(kw_norm)
+ 
+    for kw in spacy_keywords:
+        kw_norm = normalize_keyword(kw)
+        if kw_norm not in merged_seen:
+            merged_seen.add(kw_norm)
+            all_keywords.append(kw_norm)
+ 
     return all_keywords[:30]
+ 
 
 # =========================================================
 # EXPERIENCE QUALITY ANALYSIS
