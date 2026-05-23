@@ -46,34 +46,38 @@ with col1:
 
 with col2:
     st.subheader("Job Description")
-    jd_input_mode = st.radio(
-        "Input method",
-        ["Paste Text", "Fetch from URL"],
-        horizontal=True
+
+    jd_url = st.text_input(
+        "Paste a job URL",
+        placeholder="https://naukri.com/... or Indeed, Internshala, Oracle, Workday..."
     )
+
     jd_text = ""
 
-    if jd_input_mode == "Fetch from URL":
-        jd_url = st.text_input(
-            "Paste a job URL (Naukri, Indeed, Internshala, etc.)",
-            placeholder="https://www.naukri.com/job-listings-..."
-        )
-        if jd_url:
-            with st.spinner("Fetching job description..."):
-                from analyzer.scraper import fetch_jd_from_url
-                result_scrape = fetch_jd_from_url(jd_url)
+    if jd_url:
+        with st.spinner("Fetching job description..."):
+            from analyzer.scraper import fetch_jd_from_url
+            result_scrape = fetch_jd_from_url(jd_url)
+        if result_scrape["success"]:
+            word_count = len(result_scrape["text"].split())
+            st.success(f"Fetched from {result_scrape['platform']} — {word_count} words extracted.")
+            jd_text = result_scrape["text"]
+            with st.expander("Preview fetched JD"):
+                preview = result_scrape["text"]
+                st.text(preview[:1000] + "..." if len(preview) > 1000 else preview)
+        else:
+            st.error(result_scrape["error"])
 
-            if result_scrape["success"]:
-                word_count = len(result_scrape["text"].split())
-                st.success(f"Fetched successfully — {word_count} words extracted.")
-                jd_text = result_scrape["text"]
-                with st.expander("Preview fetched JD"):
-                    preview = result_scrape["text"]
-                    st.text(preview[:1000] + "..." if len(preview) > 1000 else preview)
-            else:
-                st.error(result_scrape["error"])
-    else:
-        jd_text = st.text_area("Paste the job description here", height=300)
+    st.markdown("<div style='text-align:center; color:gray; margin: 8px 0'>— OR —</div>", unsafe_allow_html=True)
+
+    manual_jd = st.text_area(
+        "Paste the job description manually",
+        height=200,
+        placeholder="Copy and paste the full job description here..."
+    )
+
+    if manual_jd.strip():
+        jd_text = manual_jd
 
 # ── Analyze Button ─────────────────────────────────────────────────────────────
 
